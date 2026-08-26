@@ -20,9 +20,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     output_template = "downloaded_video.mp4"
     ydl_opts = {
-        'format': 'best',
+        'format': 'best/bestvideo+bestaudio',
         'outtmpl': output_template,
         'max_filesize': 50 * 1024 * 1024,
+        'geo_bypass': True,
+        'nocheckcertificate': True,
     }
 
     try:
