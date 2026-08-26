@@ -16,26 +16,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not url or not url.startswith("http"):
         return
 
-    await update.message.reply_text("⏳ جاري تحليل الرابط وتحميل المقاطع، قليلاً من الوقت...")
+    # التحقق من أن الرابط خاص بتطبيق X (تويتر)
+    if not any(domain in url for domain in ["twitter.com", "x.com"]):
+        await update.message.reply_text("❌ هذا البوت مخصص لتنزيل مقاطع تطبيق X (تويتر) فقط.")
+        return
+
+    await update.message.reply_text("⏳ جاري تحليل رابط X وتحميل المقاطع...")
 
     output_template = "downloaded_video.mp4"
     ydl_opts = {
-        'format': 'best/bestvideo+bestaudio',
+        'format': 'best',
         'outtmpl': output_template,
         'max_filesize': 50 * 1024 * 1024,
         'geo_bypass': True,
         'nocheckcertificate': True,
-        'extractor_args': {
-            'tiktok': {'api_hostname': 'api16-normal-c-useast1a.tiktokv.com'},
-        },
-        'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.5',
-            'Sec-Ch-Ua': '"Chromium";v="122", "Not(A:Brand";v="24", "Google Chrome";v="122"',
-            'Sec-Ch-Ua-Mobile': '?0',
-            'Sec-Ch-Ua-Platform': '"Windows"',
-        }
     }
 
     try:
@@ -44,19 +38,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if os.path.exists(output_template):
             with open(output_template, 'rb') as video_file:
-                await update.message.reply_video(video=video_file, caption="✅ تم التنزيل بنجاح بواسطة البوت.")
+                await update.message.reply_video(video=video_file, caption="✅ تم تنزيل فيديو X بنجاح.")
             os.remove(output_template)
         else:
-            await update.message.reply_text("❌ عذراً، لم أتمكن من العثور على ملف الفيديو للتحميل.")
+            await update.message.reply_text("❌ عذراً، لم أتمكن من العثور على ملف الفيديو في الرابط.")
     except Exception as e:
-        await update.message.reply_text(f"❌ حدث خطأ أثناء التحميل: تأكد أن الرابط عام وصحيح.")
+        await update.message.reply_text("❌ حدث خطأ أثناء التحميل: تأكد أن التغريدة عامة وتحتوي على فيديو.")
         if os.path.exists(output_template):
             os.remove(output_template)
 
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
-    print("🤖 البوت يعمل الآن ويستمع للروابط...")
+    print("🤖 بوت X يعمل الآن...")
     app.run_polling()
 
 if __name__ == '__main__':
