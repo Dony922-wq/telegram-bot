@@ -1,57 +1,206 @@
-import os
-import logging
-from telegram import Update
-from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
-import yt_dlp
 
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
+import os
+import re
+import asyncio
+import logging
+from io import BytesIO
+
+import yt_dlp
+from telegram import Update, InputFile
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    MessageHandler,
+    ContextTypes,
+    filters,
 )
 
-TOKEN = "8882480132:AAEvS7IF-00mXJ2P-ySbD_Xyr4ZiJ7yfOOk"
+TOKEN = os.environ.get("8790107411:AAERI47KWloR0aGsAyAurcsLAgmAlDjaJ2M", "")
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    url = update.message.text
-    if not url or not url.startswith("http"):
-        return
+MAX_RESULTS = 100
 
-    # التحقق من أن الرابط خاص بتطبيق X (تويتر)
-    if not any(domain in url for domain in ["twitter.com", "x.com"]):
-        await update.message.reply_text("❌ هذا البوت مخصص لتنزيل مقاطع تطبيق X (تويتر) فقط.")
-        return
+EXCLUDE_WORDS = [
+    "حفلة", "حفلات", "حفل", "حفله",
+    "جلسة", "جلسات", "جلسه",
+    "ابتزاز",
+    "مقابلة", "مقابلات", "مقابله",
+    "كواليس", "كاريوكي", "karaoke",
+    "ريمكس", "remix", "ميكس", "مكس",
+    "لايف", "live", "concert",
+    "حفلة كاملة", "مسرح", "reaction",
+    "بطيء", "slow", "رد فعل",
+]
 
-    await update.message.reply_text("⏳ جاري تحليل رابط X وتحميل المقاطع...")
+logging.basicConfig(
+    format="%(asctime)s %(levelname)s %(message)s",
+    level=logging.INFO,
+)
+logger = logging.getLogger(__name__)
 
-    output_template = "downloaded_video.mp4"
-    ydl_opts = {
-        'format': 'best',
-        'outtmpl': output_template,
-        'max_filesize': 50 * 1024 * 1024,
-        'geo_bypass': True,
-        'nocheckcertificate': True,
+
+def unwanted(title):
+    text = title.casefold()
+    return any(word.casefold() in text for word in EXCLUDE_WORDS)
+
+
+def clean_title(title):
+    # حذف أرقام الترتيب والرموز الشائعة للمقارنة
+    title = re.sub(r"^\s*\d+[\s._-]+", "", title)
+    title = re.sub(r"[^\w]", "", title.casefold())
+    return title
+
+
+def search_songs(artist):
+    options = {
+        "quiet": True,
+        "no_warnings": True,
+        "extract_flat": True,
+        "skip_download": True,
+        "playlistend": MAX_RESULTS,
     }
 
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([url])
+    query = f"ytsearch{MAX_RESULTS}:{artist} official audio"
 
-        if os.path.exists(output_template):
-            with open(output_template, 'rb') as video_file:
-                await update.message.reply_video(video=video_file, caption="✅ تم تنزيل فيديو X بنجاح.")
-            os.remove(output_template)
-        else:
-            await update.message.reply_text("❌ عذراً، لم أتمكن من العثور على ملف الفيديو في الرابط.")
-    except Exception as e:
-        await update.message.reply_text("❌ حدث خطأ أثناء التحميل: تأكد أن التغريدة عامة وتحتوي على فيديو.")
-        if os.path.exists(output_template):
-            os.remove(output_template)
+    with yt_dlp.YoutubeDL(options) as ydl:
+        data = ydl.extract_info(query, download=False)
+
+    songs = []
+    seen = set()
+
+    for item in data.get("entries") or []:
+        if not item:
+            continue
+
+        title = (item.get("title") or "").strip()
+        url = item.get("url") or item.get("webpage_url") or ""
+
+        if not title or unwanted(title):
+            continue
+
+        # نستخدم رابط يوتيوب عند توفر معرّف الفيديو
+        video_id = item.get("id")
+        if video_id:
+            url = f"https://www.youtube.com/watch?v={video_id}"
+
+        if not url.startswith("https://"):
+            continue
+
+        key = clean_title(title)
+        if not key or key in seen:
+            continue
+
+        seen.add(key)
+        songs.append({"title": title, "url": url})
+
+    return songs
+
+
+async def start(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    await update.message.reply_text(
+        "🎵 DJ HAMAD\n\n"
+        "أرسل اسم المغني للبحث عن أغانيه.\n"
+        "مثال: ماجد المهندس\n\n"
+        "سأستبعد عناوين الحفلات والجلسات والريمكس "
+        "والمقابلات وابتزاز."
+    )
+
+
+async def handle_artist(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    artist = (update.message.text or "").strip()
+
+    if not artist or len(artist) > 100:
+        await update.message.reply_text(
+            "اكتب اسم مغنٍ صحيحًا، بحد أقصى 100 حرف."
+        )
+        return
+
+    status = await update.message.reply_text(
+        f"🔎 أبحث عن: {artist}\nانتظر قليلًا..."
+    )
+
+    try:
+        songs = await asyncio.to_thread(search_songs, artist)
+
+        if not songs:
+            await status.edit_text(
+                "ما لقيت نتائج مناسبة. جرّب كتابة الاسم بطريقة أخرى."
+            )
+            return
+
+        output = [
+            f"DJ HAMAD - {artist}",
+            f"عدد النتائج: {len(songs)}",
+            "",
+        ]
+
+        for number, song in enumerate(songs, start=1):
+            output.append(
+                f"{number:03d} - {song['title']}"
+            )
+            output.append(song["url"])
+            output.append("")
+
+        content = "\n".join(output)
+        filename = re.sub(
+            r'[<>:"/\\|?*\n\r]', "_", artist
+        )[:70] or "songs"
+
+        buffer = BytesIO(content.encode("utf-8"))
+        buffer.name = f"{filename}.txt"
+
+        await status.edit_text(
+            f"✅ انتهى البحث عن {artist}\n"
+            f"عدد النتائج: {len(songs)}\n"
+            "أرفقت لك قائمة الأغاني مرتبة بالأرقام."
+        )
+
+        await update.message.reply_document(
+            document=InputFile(buffer, filename=buffer.name),
+            caption=f"🎵 قائمة أغاني {artist}",
+        )
+
+    except Exception:
+        logger.exception("Search failed")
+        await status.edit_text(
+            "❌ تعذر البحث الآن. حاول مرة ثانية لاحقًا."
+        )
+
+
+async def error_handler(
+    update: object,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    logger.error(
+        "Telegram update failed",
+        exc_info=context.error,
+    )
+
 
 def main():
-    app = ApplicationBuilder().token(TOKEN).build()
-    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
-    print("🤖 بوت X يعمل الآن...")
+    if not TOKEN:
+        raise RuntimeError(
+            "أضف TELEGRAM_BOT_TOKEN في إعدادات الاستضافة."
+        )
+
+    app = Application.builder().token(TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND,
+            handle_artist,
+        )
+    )
+    app.add_error_handler(error_handler)
+
+    logger.info("DJ HAMAD bot starting")
     app.run_polling()
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()
